@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,36 +15,55 @@ import (
 
 // SocialMediaCheck represents a social media platform to check
 type SocialMediaCheck struct {
-	Name     string // Name of the platform
 	URL      string // URL template with %s for username
 	Username string // Username to check
 }
 
 // Result holds the scanning result for each platform
 type Result struct {
-	Platform string `json:"platform"`        // Platform name
+	Platform string `json:"platform"`        // Platform name (derived from URL)
 	URL      string `json:"url"`             // Full URL checked
 	Exists   bool   `json:"exists"`          // Whether the profile exists
 	Error    string `json:"error,omitempty"` // Error message if any
 }
 
+// loadPlatformsFromFile reads social media URL templates from a text file
+func loadPlatformsFromFile(filename string, username string) ([]SocialMediaCheck, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	var platforms []SocialMediaCheck
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" && !strings.HasPrefix(line, "#") { // Skip empty lines and comments
+			parts := strings.SplitN(line, ": ", 2)
+			if len(parts) == 2 {
+				url := strings.TrimSpace(parts[1])
+				platforms = append(platforms, SocialMediaCheck{
+					URL:      url,
+					Username: username,
+				})
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading file: %v", err)
+	}
+
+	return platforms, nil
+}
+
 // checkSocialMedia scans multiple platforms concurrently
 func checkSocialMedia(username string) []Result {
-	// List of social media platforms to check
-	platforms := []SocialMediaCheck{
-		{Name: "Twitter", URL: "https://twitter.com/%s", Username: username},
-		{Name: "Instagram", URL: "https://instagram.com/%s", Username: username},
-		{Name: "Facebook", URL: "https://facebook.com/%s", Username: username},
-		{Name: "GitHub", URL: "https://github.com/%s", Username: username},
-		{Name: "LinkedIn", URL: "https://linkedin.com/in/%s", Username: username},
-		{Name: "Reddit", URL: "https://reddit.com/user/%s", Username: username},
-		{Name: "TikTok", URL: "https://tiktok.com/@%s", Username: username},
-		{Name: "YouTube", URL: "https://youtube.com/@%s", Username: username},
-		{Name: "Pinterest", URL: "https://pinterest.com/%s", Username: username},
-		{Name: "Medium", URL: "https://medium.com/@%s", Username: username},
-		{Name: "Twitch", URL: "https://twitch.tv/%s", Username: username},
-		{Name: "Snapchat", URL: "https://snapchat.com/add/%s", Username: username},
-		{Name: "Telegram", URL: "https://t.me/%s", Username: username},
+	// Load platforms from file
+	platforms, err := loadPlatformsFromFile("socials.txt", username)
+	if err != nil {
+		return []Result{{Platform: "Error", Error: err.Error()}}
 	}
 
 	// Channel to collect results from goroutines
@@ -60,14 +82,15 @@ func checkSocialMedia(username string) []Result {
 			// Construct the full URL with the username
 			url := fmt.Sprintf(p.URL, p.Username)
 			resp, err := client.Get(url)
-			result := Result{Platform: p.Name, URL: url}
+			// Extract platform name from URL (simple approach)
+			platformName := strings.Split(strings.Split(url, "://")[1], ".")[0]
+			result := Result{Platform: platformName, URL: url}
 
 			if err != nil {
 				result.Error = err.Error()
 			} else {
 				defer resp.Body.Close()
 				// Simple check: if status is 200, assume profile exists
-				// Note: Some platforms may require more sophisticated checks
 				result.Exists = resp.StatusCode == http.StatusOK
 			}
 
